@@ -1,0 +1,21 @@
+{
+  "domains": [
+    "Customer Experience",
+    "Supply Chain",
+    "Merchandising",
+    "HR",
+    "Finance",
+    "Marketing",
+    "IT / Tech",
+    "Legal",
+    "R&D"
+  ],
+  "currencies": [
+    "USD",
+    "EUR",
+    "GBP",
+    "JPY",
+    "CAD",
+    "AUD"
+  ]
+}
