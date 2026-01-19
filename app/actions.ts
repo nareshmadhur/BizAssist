@@ -88,3 +88,43 @@ export async function deleteUseCaseAction(id: string) {
     await deleteUseCase(id);
 }
 
+export async function chatWithStrategy(
+    message: string,
+    history: { role: 'user' | 'ai', text: string }[],
+    context: Partial<UseCase>
+): Promise<string> {
+    if (!process.env.GEMINI_API_KEY) {
+        return "I'm sorry, but I can't connect to my brain right now (Missing API Key).";
+    }
+
+    const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
+
+    const contextStr = JSON.stringify(context, null, 2);
+
+    const systemPrompt = `
+You are an expert Business Strategy Consultant Copilot.
+You are helping a user refine a business case strategy.
+Current Strategy Context (JSON):
+${contextStr}
+
+Your goal is to help the user improve, clarify, or expand on this strategy.
+- Be ultra-concise, professional, and insightful. Keep it within 1 paragraph wherever possible.
+- If the user asks for changes, suggest specific text or improvements.
+- You cannot directly modify the database, so guide the user on what to write or provide draft text they can copy.
+- Refer to the specific fields in the context (title, description, commercialValue, etc.) when relevant.
+
+Conversation History:
+${history.map(h => `${h.role.toUpperCase()}: ${h.text}`).join('\n')}
+USER: ${message}
+AI:
+`;
+
+    try {
+        const result = await model.generateContent(systemPrompt);
+        const response = await result.response;
+        return response.text();
+    } catch (error) {
+        console.error("AI Chat Failed:", error);
+        return "I'm having trouble thinking right now. Please try again later.";
+    }
+}

@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Stage, UseCase, Currency, DEFAULT_DOMAINS, ValueType, Duration } from "@/app/lib/types";
-import { updateUseCaseAction, deleteUseCaseAction } from "@/app/actions";
-import { ArrowLeft, Send, Sparkles, Wand2, Plus, X, Trash2, AlertCircle } from "lucide-react";
+import { updateUseCaseAction, deleteUseCaseAction, chatWithStrategy } from "@/app/actions";
+import { ArrowLeft, Send, Sparkles, Wand2, Plus, X, Trash2, AlertCircle, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/providers/ToastProvider";
+import ReactMarkdown from "react-markdown";
 
 interface StrategyEditorProps {
     initialData: UseCase;
@@ -18,9 +19,16 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
     const { showToast } = useToast();
     const router = useRouter();
     const [chatInput, setChatInput] = useState("");
+    const [isChatting, setIsChatting] = useState(false);
     const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'ai', text: string }[]>([
         { role: 'ai', text: `I've loaded the context for "${initialData.title}". How can I help refine this strategy today?` }
     ]);
+    const chatEndRef = useRef<HTMLDivElement>(null);
+    
+    // Auto-scroll to bottom of chat
+    useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [chatHistory, isChatting]);
     
     // Auto-save logic (debounce)
     useEffect(() => {
@@ -54,19 +62,24 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
     };
 
     const handleChatSubmit = async () => {
-        if (!chatInput.trim()) return;
+        if (!chatInput.trim() || isChatting) return;
         
-        const newMsg = { role: 'user' as const, text: chatInput };
-        setChatHistory(prev => [...prev, newMsg]);
+        const userMsg = { role: 'user' as const, text: chatInput };
+        const currentHistory = [...chatHistory, userMsg];
+        
+        setChatHistory(currentHistory);
         setChatInput("");
+        setIsChatting(true);
         
-        // Simulate AI response (Mock for now, can hook up to real Gemini later)
-        setTimeout(() => {
-            setChatHistory(prev => [...prev, { 
-                role: 'ai', 
-                text: "That's a good point. I suggest we expand the 'Risks' section to include data privacy concerns. Would you like me to draft that for you?" 
-            }]);
-        }, 1000);
+        try {
+            const response = await chatWithStrategy(chatInput, currentHistory, data);
+            setChatHistory([...currentHistory, { role: 'ai', text: response }]);
+        } catch (error) {
+            console.error(error);
+            showToast("Failed to get response from AI", "error");
+        } finally {
+            setIsChatting(false);
+        }
     };
 
     return (
@@ -295,10 +308,28 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                                 ? 'bg-indigo-600 text-white rounded-br-none' 
                                 : 'bg-white text-slate-700 border border-slate-200 rounded-bl-none'
                             }`}>
-                                {msg.text}
+                                <ReactMarkdown 
+                                    components={{
+                                        ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 space-y-1" {...props} />,
+                                        ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 space-y-1" {...props} />,
+                                        p: ({node, ...props}) => <p className="mb-2 last:mb-0" {...props} />,
+                                        strong: ({node, ...props}) => <strong className="font-semibold" {...props} />,
+                                    }}
+                                >
+                                    {msg.text}
+                                </ReactMarkdown>
                             </div>
                         </div>
                     ))}
+                    {isChatting && (
+                        <div className="flex justify-start">
+                             <div className="max-w-[90%] p-4 rounded-2xl bg-white border border-slate-200 rounded-bl-none flex items-center gap-2 text-slate-400">
+                                <Loader2 className="animate-spin" size={16} />
+                                <span className="text-xs font-medium">Thinking...</span>
+                            </div>
+                        </div>
+                    )}
+                    <div ref={chatEndRef} />
                     {/* Spacer for bottom input */}
                     <div className="h-2"></div>
                 </div>
@@ -311,11 +342,13 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                             onChange={e => setChatInput(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && handleChatSubmit()}
                             placeholder="Ask me to refine a section..."
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 pl-4 pr-12 text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 transition-all text-sm shadow-inner"
+                            disabled={isChatting}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 pl-4 pr-12 text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 transition-all text-sm shadow-inner disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                         <button 
                             onClick={handleChatSubmit}
-                            className="absolute right-2 top-2 p-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors shadow-sm"
+                            disabled={isChatting}
+                            className="absolute right-2 top-2 p-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors shadow-sm disabled:bg-slate-300 disabled:cursor-not-allowed"
                         >
                             <Send size={16} />
                         </button>

@@ -12,8 +12,16 @@ import Link from "next/link";
 export default function CreatePage() {
     const [text, setText] = useState("");
     const [loading, setLoading] = useState(false);
+    const [isSkipping, setIsSkipping] = useState(false);
     const { showToast } = useToast();
     const router = useRouter();
+
+    const generateId = () => {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+        }
+        return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    };
 
     const handleStartAnalysis = async () => {
         if (text.length < 20) {
@@ -24,7 +32,7 @@ export default function CreatePage() {
         setLoading(true);
         try {
             const extracted = await extractUseCaseFromText(text);
-            const newId = crypto.randomUUID();
+            const newId = generateId();
             const finalData = {
                 ...extracted,
                 id: newId,
@@ -41,19 +49,26 @@ export default function CreatePage() {
     };
 
     const handleSkipToEditor = async () => {
-        const newId = crypto.randomUUID();
-        const emptyData: UseCase = {
-            id: newId,
-            title: "Untitled Strategy",
-            description: "",
-            domain: "General",
-            stage: "Idea",
-            commercialValue: [],
-            softBenefits: [],
-            createdAt: new Date().toISOString()
-        };
-        await saveUseCase(emptyData);
-        router.push(`/strategy/${newId}`);
+        setIsSkipping(true);
+        try {
+            const newId = generateId();
+            const emptyData: UseCase = {
+                id: newId,
+                title: "Untitled Strategy",
+                description: "",
+                domain: "General",
+                stage: "Idea",
+                commercialValue: [],
+                softBenefits: [],
+                createdAt: new Date().toISOString()
+            };
+            await saveUseCase(emptyData);
+            router.push(`/strategy/${newId}`);
+        } catch (error) {
+            console.error("Skip to editor failed:", error);
+            showToast("Failed to create new strategy. Please try again.", "error");
+            setIsSkipping(false);
+        }
     };
 
     if (loading) {
@@ -112,9 +127,17 @@ export default function CreatePage() {
                     <div className="mt-6 text-center relative z-10">
                         <button 
                             onClick={handleSkipToEditor} 
-                            className="text-sm font-medium text-slate-500 hover:text-indigo-600 transition-colors py-2 px-4 rounded-lg hover:bg-slate-100"
+                            disabled={isSkipping || loading}
+                            className="text-sm font-medium text-slate-500 hover:text-indigo-600 transition-colors py-2 px-4 rounded-lg hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            Skip AI & Start Manually
+                            {isSkipping ? (
+                                <span className="flex items-center gap-2">
+                                    <Loader2 className="animate-spin" size={14} />
+                                    Creating...
+                                </span>
+                            ) : (
+                                "Skip AI & Start Manually"
+                            )}
                         </button>
                     </div>
                 </div>
