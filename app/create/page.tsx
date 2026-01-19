@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { UseCase } from "@/app/lib/types";
 import { saveUseCase } from "@/app/lib/storage";
+import { saveClientUseCase } from "@/app/lib/client-storage";
 import { extractUseCaseFromText } from "@/app/actions";
 import { useRouter } from "next/navigation";
 import { Loader2, Sparkles, ArrowLeft } from "lucide-react";
@@ -39,7 +40,16 @@ export default function CreatePage() {
                 createdAt: new Date().toISOString()
             } as UseCase;
             
-            await saveUseCase(finalData);
+            // Save to client storage first (reliable)
+            saveClientUseCase(finalData);
+
+            // Attempt to save to server (might fail in production without DB)
+            try {
+                await saveUseCase(finalData);
+            } catch (err) {
+                console.warn("Server save failed, proceeding with client storage", err);
+            }
+
             router.push(`/strategy/${newId}`);
         } catch (e) {
             console.error(e);
@@ -62,7 +72,17 @@ export default function CreatePage() {
                 softBenefits: [],
                 createdAt: new Date().toISOString()
             };
-            await saveUseCase(emptyData);
+            
+            // Save to client storage first (reliable)
+            saveClientUseCase(emptyData);
+
+            // Attempt to save to server
+            try {
+                await saveUseCase(emptyData);
+            } catch (err) {
+                console.warn("Server save failed, proceeding with client storage", err);
+            }
+
             router.push(`/strategy/${newId}`);
         } catch (error) {
             console.error("Skip to editor failed:", error);

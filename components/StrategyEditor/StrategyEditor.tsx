@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Stage, UseCase, Currency, DEFAULT_DOMAINS, ValueType, Duration } from "@/app/lib/types";
 import { updateUseCaseAction, deleteUseCaseAction, chatWithStrategy } from "@/app/actions";
+import { getClientUseCaseById, saveClientUseCase, deleteClientUseCase } from "@/app/lib/client-storage";
 import { ArrowLeft, Send, Sparkles, Wand2, Plus, X, Trash2, AlertCircle, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -10,20 +11,41 @@ import { useToast } from "@/components/providers/ToastProvider";
 import ReactMarkdown from "react-markdown";
 
 interface StrategyEditorProps {
-    initialData: UseCase;
+    initialData?: UseCase;
+    strategyId: string;
 }
 
-export default function StrategyEditor({ initialData }: StrategyEditorProps) {
-    const [data, setData] = useState<UseCase>(initialData);
+export default function StrategyEditor({ initialData, strategyId }: StrategyEditorProps) {
+    const [data, setData] = useState<UseCase | null>(initialData || null);
+    const [loading, setLoading] = useState(!initialData);
     const [saving, setSaving] = useState(false);
     const { showToast } = useToast();
     const router = useRouter();
     const [chatInput, setChatInput] = useState("");
     const [isChatting, setIsChatting] = useState(false);
-    const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'ai', text: string }[]>([
-        { role: 'ai', text: `I've loaded the context for "${initialData.title}". How can I help refine this strategy today?` }
-    ]);
+    const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'ai', text: string }[]>([]);
+    
     const chatEndRef = useRef<HTMLDivElement>(null);
+
+    // Initialize chat history when data is loaded
+    useEffect(() => {
+        if (data && chatHistory.length === 0) {
+            setChatHistory([
+                { role: 'ai', text: `I've loaded the context for "${data.title}". How can I help refine this strategy today?` }
+            ]);
+        }
+    }, [data, chatHistory.length]);
+
+    // Load from client storage if not provided by server
+    useEffect(() => {
+        if (!initialData) {
+            const localData = getClientUseCaseById(strategyId);
+            if (localData) {
+                setData(localData);
+            }
+            setLoading(false);
+        }
+    }, [initialData, strategyId]);
     
     // Auto-scroll to bottom of chat
     useEffect(() => {
@@ -32,27 +54,38 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
     
     // Auto-save logic (debounce)
     useEffect(() => {
+        if (!data) return;
+
         const handleAutoSave = async () => {
-            if (JSON.stringify(data) !== JSON.stringify(initialData)) {
-                setSaving(true);
-                try {
-                    await updateUseCaseAction(data.id, data);
-                } catch (e) {
-                    showToast("Failed to save changes", "error");
-                } finally {
-                    setSaving(false);
-                }
+            // Check if dirty vs initial (or just save always on change)
+            // Ideally we compare against a ref of 'lastSavedData' but simplistic is fine
+            setSaving(true);
+            try {
+                // 1. Save to Local Storage (Always works)
+                saveClientUseCase(data);
+
+                // 2. Try to save to Server (Might fail if readonly /tmp is gone)
+                // We don't block on this.
+                await updateUseCaseAction(data.id, data).catch(e => {
+                    console.warn("Server save failed, relying on local storage", e);
+                });
+            } catch (e) {
+                console.error("Save failed", e);
+            } finally {
+                setSaving(false);
             }
         };
 
-        const timer = setTimeout(handleAutoSave, 3000);
+        const timer = setTimeout(handleAutoSave, 2000);
         return () => clearTimeout(timer);
-    }, [data, initialData, showToast]);
+    }, [data]);
 
     const handleDelete = async () => {
+        if (!data) return;
         if (confirm("Are you sure you want to delete this strategy? This action cannot be undone.")) {
             try {
-                await deleteUseCaseAction(data.id);
+                deleteClientUseCase(data.id);
+                await deleteUseCaseAction(data.id).catch(() => {}); // Ignore server errors
                 showToast("Strategy deleted", "success");
                 router.push("/");
             } catch (e) {
@@ -62,7 +95,7 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
     };
 
     const handleChatSubmit = async () => {
-        if (!chatInput.trim() || isChatting) return;
+        if (!chatInput.trim() || isChatting || !data) return;
         
         const userMsg = { role: 'user' as const, text: chatInput };
         const currentHistory = [...chatHistory, userMsg];
@@ -81,6 +114,26 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
             setIsChatting(false);
         }
     };
+
+    if (loading) {
+        return (
+            <div className="flex-1 flex items-center justify-center h-full bg-slate-50">
+                <Loader2 className="animate-spin text-indigo-600" size={32} />
+            </div>
+        );
+    }
+
+    if (!data) {
+         return (
+            <div className="flex-1 flex flex-col items-center justify-center h-full bg-slate-50 p-8">
+                <h2 className="text-2xl font-bold text-slate-900 mb-2">Strategy Not Found</h2>
+                <p className="text-slate-500 mb-6">This strategy may have been deleted or does not exist.</p>
+                <Link href="/" className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors">
+                    Return to Dashboard
+                </Link>
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-1 min-h-0 bg-slate-50 overflow-hidden h-full">
@@ -126,7 +179,6 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                                         className="bg-transparent border-none text-slate-700 focus:ring-0 p-0 text-sm font-medium cursor-pointer min-w-[120px]"
                                     >
                                         <option value="" disabled>Select Domain</option>
-                                        {/* Add current domain if not in defaults to avoid it disappearing */}
                                         {!DEFAULT_DOMAINS.includes(data.domain) && data.domain && (
                                             <option value={data.domain}>{data.domain}</option>
                                         )}
@@ -179,9 +231,11 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                                     <div key={i} className="bg-white border border-slate-200 p-5 rounded-xl shadow-sm hover:shadow-md transition-shadow flex flex-col relative group/card">
                                         <button 
                                             onClick={() => {
-                                                const newVal = [...data.commercialValue];
-                                                newVal.splice(i, 1);
-                                                setData({...data, commercialValue: newVal});
+                                                if (data) {
+                                                    const newVal = [...data.commercialValue];
+                                                    newVal.splice(i, 1);
+                                                    setData({...data, commercialValue: newVal});
+                                                }
                                             }}
                                             className="absolute top-2 right-2 text-slate-300 hover:text-red-400 opacity-0 group-hover/card:opacity-100 transition-opacity"
                                         >
@@ -191,9 +245,11 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                                             <select
                                                 value={cv.currency}
                                                 onChange={e => {
-                                                    const newVal = [...data.commercialValue];
-                                                    newVal[i].currency = e.target.value as Currency;
-                                                    setData({...data, commercialValue: newVal});
+                                                    if (data) {
+                                                        const newVal = [...data.commercialValue];
+                                                        newVal[i].currency = e.target.value as Currency;
+                                                        setData({...data, commercialValue: newVal});
+                                                    }
                                                 }}
                                                 className="bg-transparent border-none text-slate-400 text-sm font-medium focus:ring-0 p-0 w-auto cursor-pointer"
                                             >
@@ -203,9 +259,11 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                                                 type="number"
                                                 value={cv.amount}
                                                 onChange={e => {
-                                                    const newVal = [...data.commercialValue];
-                                                    newVal[i].amount = Number(e.target.value);
-                                                    setData({...data, commercialValue: newVal});
+                                                    if (data) {
+                                                        const newVal = [...data.commercialValue];
+                                                        newVal[i].amount = Number(e.target.value);
+                                                        setData({...data, commercialValue: newVal});
+                                                    }
                                                 }}
                                                 className="bg-transparent border-none text-3xl font-bold text-slate-900 w-full focus:ring-0 p-0"
                                             />
@@ -214,9 +272,11 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                                             <select
                                                 value={cv.type}
                                                 onChange={e => {
-                                                    const newVal = [...data.commercialValue];
-                                                    newVal[i].type = e.target.value as ValueType;
-                                                    setData({...data, commercialValue: newVal});
+                                                    if (data) {
+                                                        const newVal = [...data.commercialValue];
+                                                        newVal[i].type = e.target.value as ValueType;
+                                                        setData({...data, commercialValue: newVal});
+                                                    }
                                                 }}
                                                 className="bg-slate-100 border-none text-slate-600 font-medium px-2 py-0.5 rounded text-xs cursor-pointer focus:ring-0 w-auto"
                                             >
@@ -226,9 +286,11 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                                             <select
                                                 value={cv.duration}
                                                 onChange={e => {
-                                                    const newVal = [...data.commercialValue];
-                                                    newVal[i].duration = e.target.value as Duration;
-                                                    setData({...data, commercialValue: newVal});
+                                                    if (data) {
+                                                        const newVal = [...data.commercialValue];
+                                                        newVal[i].duration = e.target.value as Duration;
+                                                        setData({...data, commercialValue: newVal});
+                                                    }
                                                 }}
                                                 className="bg-transparent border-none uppercase text-[10px] tracking-wider text-slate-400 font-bold cursor-pointer focus:ring-0 w-auto text-right"
                                             >
@@ -238,7 +300,7 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                                     </div>
                                 ))}
                                 <button 
-                                    onClick={() => setData({
+                                    onClick={() => data && setData({
                                         ...data, 
                                         commercialValue: [...data.commercialValue, { amount: 0, currency: "USD", type: "Cost Savings", duration: "Annual" }]
                                     })}
@@ -261,17 +323,21 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                                             <input
                                                 value={sb}
                                                 onChange={e => {
-                                                    const newBenefits = [...data.softBenefits];
-                                                    newBenefits[i] = e.target.value;
-                                                    setData({ ...data, softBenefits: newBenefits });
+                                                    if (data) {
+                                                        const newBenefits = [...data.softBenefits];
+                                                        newBenefits[i] = e.target.value;
+                                                        setData({ ...data, softBenefits: newBenefits });
+                                                    }
                                                 }}
                                                 className="w-full bg-transparent border-none text-slate-700 focus:ring-0 p-0 leading-relaxed text-sm font-medium"
                                             />
                                             <button 
                                                 onClick={() => {
-                                                    const newBenefits = [...data.softBenefits];
-                                                    newBenefits.splice(i, 1);
-                                                    setData({ ...data, softBenefits: newBenefits });
+                                                    if (data) {
+                                                        const newBenefits = [...data.softBenefits];
+                                                        newBenefits.splice(i, 1);
+                                                        setData({ ...data, softBenefits: newBenefits });
+                                                    }
                                                 }}
                                                 className="text-slate-300 hover:text-red-400 opacity-0 group-hover/item:opacity-100 transition-opacity"
                                             >
@@ -281,7 +347,7 @@ export default function StrategyEditor({ initialData }: StrategyEditorProps) {
                                     ))}
                                 </div>
                                 <button 
-                                    onClick={() => setData({ ...data, softBenefits: [...data.softBenefits, "New strategic benefit..."] })}
+                                    onClick={() => data && setData({ ...data, softBenefits: [...data.softBenefits, "New strategic benefit..."] })}
                                     className="w-full py-3 text-sm text-slate-400 hover:text-blue-600 hover:bg-slate-50 rounded-b-lg border-t border-dashed border-slate-100 transition-colors flex items-center justify-center gap-2"
                                 >
                                     <Plus size={14} /> Add Benefit
